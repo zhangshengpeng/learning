@@ -49,7 +49,6 @@ function vue2Sidebar() {
 export default defineConfig({
   title: "Vue 源码解析",
   description: "深入理解 Vue 2 & Vue 3 源码设计思想",
-  base: "/learning/",
 
   themeConfig: {
     logo: "/logo.svg",

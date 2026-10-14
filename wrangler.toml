@@ -1,0 +1,4 @@
+# Cloudflare Pages 项目配置
+name = "learning-4am"
+pages_build_output_dir = "docs/.vitepress/dist"
+compatibility_date = "2025-01-01"
