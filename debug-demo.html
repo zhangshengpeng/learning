@@ -1,0 +1,1142 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>Vue 2 核心源码 — Debugger 断点调试（带完整注释）</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Segoe UI', 'PingFang SC', sans-serif; background: #1e1e2e; color: #cdd6f4; min-height: 100vh; }
+    .container { max-width: 960px; margin: 0 auto; padding: 30px 20px; }
+    h1 { color: #89b4fa; font-size: 22px; margin-bottom: 6px; }
+    .subtitle { color: #a6adc8; font-size: 13px; margin-bottom: 20px; }
+    .section-title { color: #f9e2af; font-size: 16px; margin: 28px 0 12px 0; padding-bottom: 6px; border-bottom: 1px solid #45475a; }
+    .card { background: #313244; border-radius: 10px; padding: 20px; margin-bottom: 14px; border-left: 3px solid #89b4fa; }
+    .card.react { border-left-color: #cba6f7; }
+    .card.render { border-left-color: #a6e3a1; }
+    .card.update { border-left-color: #f9e2af; }
+    .card.diff   { border-left-color: #f38ba8; }
+    .step { display: inline-block; background: #45475a; color: #89b4fa; border-radius: 50%; width: 26px; height: 26px; line-height: 26px; text-align: center; font-weight: bold; font-size: 13px; margin-right: 8px; flex-shrink: 0; }
+    h3 { color: #cdd6f4; font-size: 15px; margin-bottom: 8px; display: flex; align-items: center; gap: 6px; }
+    p { font-size: 13px; line-height: 1.7; color: #a6adc8; margin-bottom: 8px; }
+    code { background: #45475a; padding: 2px 6px; border-radius: 4px; font-size: 12px; color: #f5c2e7; }
+    .src-ref { font-size: 11px; color: #6c7086; margin-left: 4px; }
+    pre { background: #181825; border-radius: 8px; padding: 14px; overflow-x: auto; font-size: 12px; line-height: 1.65; margin: 8px 0; }
+    button { background: #89b4fa; color: #1e1e2e; border: none; padding: 8px 20px; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600; margin-right: 6px; margin-bottom: 6px; transition: background .2s; }
+    button:hover { background: #74c7ec; }
+    button:active { background: #94e2d5; }
+    button.accent { background: #cba6f7; }
+    button.accent:hover { background: #b4befe; }
+    .btn-group { margin: 6px 0; }
+    #app-area { background: #181825; border-radius: 8px; padding: 16px; min-height: 60px; margin-top: 10px; }
+    #app-area p { color: #cdd6f4; font-size: 14px; }
+    .inspect { background: #11111b; border-radius: 8px; padding: 14px; margin-top: 12px; max-height: 420px; overflow-y: auto; font-family: 'Cascadia Code', 'Fira Code', monospace; font-size: 12px; white-space: pre-wrap; }
+    .label { color: #a6adc8; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; }
+    .flow { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; font-size: 12px; }
+    .flow span { background: #45475a; padding: 3px 10px; border-radius: 4px; color: #cdd6f4; }
+    .flow span.arrow { background: none; color: #89b4fa; font-weight: bold; padding: 3px 2px; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+    .badge-get { background: #a6e3a1; color: #1e1e2e; }
+    .badge-set { background: #f9e2af; color: #1e1e2e; }
+    .badge-track { background: #cba6f7; color: #1e1e2e; }
+    .badge-trig { background: #f38ba8; color: #1e1e2e; }
+  </style>
+</head>
+<body>
+<div class="container">
+  <h1>🔬 Vue 2 核心源码 — 断点调试（带注释）</h1>
+  <p class="subtitle">
+    F12 打开 DevTools → Sources 面板 → 按序点击按钮进入断点 → 在 Watch 面板观察变量<br>
+    源码级别调试：所有核心函数均有行内 <code>debugger</code> + 中文注释标注
+  </p>
+
+  <!-- ==================== 响应式原理 ==================== -->
+  <div class="section-title">📦 第一部分：响应式系统 — Observer / Dep / Watcher</div>
+
+  <div class="card react">
+    <h3><span class="step">1</span>observe() 入口 → Observer 构造 → walk() → defineReactive()</h3>
+    <p>调用链: <code>observe(data)</code> → <code>new Observer(data)</code> → <code>this.walk()</code> → <code>defineReactive(obj, key)</code><span class="src-ref">src/core/observer/index.js</span></p>
+    <p>每个属性用 <code>Object.defineProperty</code> 劫持 getter/setter。每个属性在闭包中持有一个 <code>const dep = new Dep()</code>。</p>
+    <button onclick="step1_initObserve()">▶ 观察 observe → defineReactive 全过程</button>
+    <button class="accent" onclick="inspectObserveResult()">🔍 查看 data.__ob__</button>
+  </div>
+
+  <div class="card react">
+    <h3><span class="step">2</span>依赖收集：Watcher 构造 → pushTarget → getter → Dep.depend()</h3>
+    <p>调用链: <code>new Watcher(vm, renderFn)</code> → <code>pushTarget(watcher)</code> 将 <code>Dep.target</code> 指向当前 watcher → 执行 <code>renderFn()</code>，模板中读取 <code>this.xxx</code> 触发 proxy getter → 触发属性 getter → <code>dep.depend()</code> → <code>Dep.target.addDep(dep)</code> → dep.subs 添加 watcher，watcher.deps 添加 dep（双向记录）<span class="src-ref">src/core/observer/watcher.js</span></p>
+    <p><span class="badge badge-track">Track</span> 依赖收集：data 属性 ↔ Dep ↔ Watcher 三者建立了关联图。</p>
+    <button onclick="step2_dependCollect()">▶ 观察 Watcher 构造 → Dep.depend</button>
+    <button class="accent" onclick="inspectDeps()">🔍 查看 dep.subs</button>
+  </div>
+
+  <div class="card react">
+    <h3><span class="step">3</span>派发更新：setter → dep.notify() → watcher.update() → 异步队列</h3>
+    <p>调用链: 修改 <code>data.xxx = newVal</code> → 触发 setter → <code>dep.notify()</code> → 遍历 <code>subs</code> 中每个 watcher 调用 <code>watcher.update()</code> → <code>queueWatcher(watcher)</code> 推入异步更新队列 → <code>nextTick(flushSchedulerQueue)</code> 微任务批量执行 → <code>watcher.run()</code> → <code>this.get()</code> 重新求值 → 触发 patch 更新 DOM<span class="src-ref">src/core/observer/scheduler.js</span></p>
+    <p><span class="badge badge-trig">Trigger</span> 派发更新：数据变更 → setter → notify → 异步批量更新。</p>
+    <button onclick="step3_triggerUpdate()">▶ 修改数据，观察 notify → update 链路</button>
+  </div>
+
+  <!-- ==================== VNode 与渲染 ==================== -->
+  <div class="section-title">🖼 第二部分：组件渲染 — VNode 创建 → DOM 渲染</div>
+
+  <div class="card render">
+    <h3><span class="step">4</span>_render() → VNode 创建：h() / createElement → new VNode()</h3>
+    <p>调用链: <code>vm._render()</code> → 执行 <code>render(h)</code> → <code>h('div', {...}, [children])</code> → <code>createElement()</code> → <code>new VNode(tag, data, children)</code><span class="src-ref">src/core/vdom/create-element.js + vnode.js</span></p>
+    <p>VNode 是纯 JS 对象，描述 DOM 结构：<code>{ tag, data, children, elm, text, key }</code></p>
+    <button onclick="step4_createVNode()">▶ 观察 _render → createElement → VNode()</button>
+    <button class="accent" onclick="inspectVNode()">🔍 查看 VNode 结构</button>
+  </div>
+
+  <div class="card render">
+    <h3><span class="step">5</span>_update() → patch()：首次渲染（VNode → 真实 DOM）</h3>
+    <p>调用链: <code>vm._update(vnode)</code> → <code>patch(oldVnode, vnode)</code> → 首次渲染时 oldVnode 是真实 DOM 容器 → <code>createElm(vnode)</code> 递归创建真实 DOM → <code>insert(parentElm, vnode.elm)</code> 将 DOM 插入页面<span class="src-ref">src/core/vdom/patch.js</span></p>
+    <p>首次挂载核心步骤：<code>createElm → createChildren → invokeCreateHooks → insert</code></p>
+    <button onclick="step5_initialPatch()">▶ 观察 _update → patch(首次挂载)</button>
+  </div>
+
+  <!-- ==================== Diff / 更新 ==================== -->
+  <div class="section-title">⚡ 第三部分：视图更新 — Diff 算法 & 异步队列</div>
+
+  <div class="card update">
+    <h3><span class="step">6</span>视图更新：数据变更 → Watcher.run() → _update → patch（对比更新）</h3>
+    <p>调用链: 数据变更触发 watcher.run() → <code>vm._update(vm._render())</code> → <code>patch(oldVnode, newVnode)</code> → <code>sameVnode(old, new)</code> 判断是否相同节点（key + tag）→ 相同则 <code>patchVnode()</code>，不同则暴力替换<span class="src-ref">src/core/vdom/patch.js</span></p>
+    <button onclick="step6_viewUpdate()">▶ 修改数据，观察 patch → patchVnode</button>
+  </div>
+
+  <div class="card diff">
+    <h3><span class="step">7</span>patchVnode() → updateChildren()：双端 Diff 算法</h3>
+    <p>核心 diff 策略：<code>oldStartIdx→←oldEndIdx</code> 和 <code>newStartIdx→←newEndIdx</code> 四个指针，每次循环做 4 种比较（头头 / 尾尾 / 头尾 / 尾头），命中后移动指针，未命中则 key 查找。时间复杂度 O(n)。<span class="src-ref">src/core/vdom/patch.js updateChildren()</span></p>
+    <button onclick="step7_diffChildren()">▶ 修改数组，观察 updateChildren 双端Diff</button>
+  </div>
+
+  <div class="card update">
+    <h3><span class="step">8</span>nextTick 异步队列：queueWatcher → flushSchedulerQueue</h3>
+    <p>多次数据变更合并为一次 DOM 更新：<code>watcher.update()</code> 不立即执行，调用 <code>queueWatcher(watcher)</code> 去重后推入队列 → <code>nextTick(flushSchedulerQueue)</code> → Promise/MutationObserver 微任务批量执行所有 watcher.run()<span class="src-ref">src/core/observer/scheduler.js</span></p>
+    <p><span class="badge badge-trig">重要</span> 连续修改 3 次数据 → 只触发 1 次 patch！</p>
+    <button onclick="step8_asyncQueue()">▶ 连续修改3次，观察异步批量更新</button>
+  </div>
+
+  <!-- ==================== 挂载展示区 ==================== -->
+  <div class="card" style="border-left-color: #a6e3a1;">
+    <h3>🖥 Vue 渲染区域</h3>
+    <div id="app-area">
+      <p>等待初始化...</p>
+    </div>
+  </div>
+
+  <!-- ==================== 探查面板 ==================== -->
+  <div class="card" style="border-left-color: #cba6f7;">
+    <h3>🔍 数据探查面板</h3>
+    <div class="btn-group">
+      <button onclick="inspectAll()">查看全部内部状态</button>
+      <button onclick="inspectObserveResult()">data.__ob__</button>
+      <button onclick="inspectDeps()">dep.subs</button>
+      <button onclick="inspectVNode()">当前 VNode</button>
+      <button onclick="clearPanel()">清空</button>
+    </div>
+    <div class="label">输出结果：</div>
+    <div class="inspect" id="inspect-output">点击上方按钮查看...</div>
+  </div>
+</div>
+
+<script>
+// =====================================================================
+//  全局变量
+// =====================================================================
+window._vm = null
+
+// =====================================================================
+//  辅助输出函数
+// =====================================================================
+const outEl = () => document.getElementById('inspect-output')
+function logToPanel(...args) {
+  outEl().textContent += '\n' + args.join(' ')
+}
+function clearPanel() {
+  outEl().textContent = ''
+}
+
+// =====================================================================
+//  内联 Vue 2 核心源码（简化但原理一致，含 debugger + 注释）
+//  文件对照：
+//    Observer  / Dep       → src/core/observer/index.js
+//    Watcher               → src/core/observer/watcher.js
+//    Scheduler             → src/core/observer/scheduler.js
+//    VNode                 → src/core/vdom/vnode.js
+//    createElement         → src/core/vdom/create-element.js
+//    patch / updateChildren → src/core/vdom/patch.js
+// =====================================================================
+
+// ---------- 1. Dep（依赖容器）----------
+// 源码位置: src/core/observer/dep.js
+
+// [注释] 每个被 defineReactive 劫持的属性，在闭包中持有一个 Dep 实例
+// Dep 负责存储所有依赖该属性的 Watcher，并在数据变化时通知它们
+let uid = 0
+class Dep {
+  constructor() {
+    this.id = uid++                       // [注释] Dep 唯一 ID
+    this.subs = []                        // [注释] 存储订阅该 Dep 的所有 Watcher
+  }
+  // [注释] addSub: 将 watcher 添加到订阅列表
+  addSub(sub) {
+    debugger                              // 🔴 [断点] 当 watcher 订阅此 dep 时触发
+    // [注释] sub 是 Watcher 实例。每次 dep.depend() 时，如果 watcher 尚未订阅此 dep，则调用 addSub
+    this.subs.push(sub)
+  }
+  // [注释] depend: 依赖收集核心 —— 将当前正在执行的 Watcher 添加为订阅者
+  depend() {
+    debugger                              // 🔴 [断点] getter 被访问时触发依赖收集
+    // [注释] Dep.target 指向当前正在执行的 Watcher（由 pushTarget 设置）
+    // 如果存在 target，调用 addDep 建立双向关联
+    if (Dep.target) {
+      Dep.target.addDep(this)
+    }
+  }
+  // [注释] removeSub: 从订阅列表中移除 watcher（cleanupDeps 时调用）
+  removeSub(sub) {
+    debugger                              // 🔴 [断点] 移除依赖关系时触发
+    const i = this.subs.indexOf(sub)
+    if (i > -1) this.subs.splice(i, 1)
+  }
+  // [注释] notify: 派发更新 —— 通知所有订阅者数据已变更
+  notify() {
+    debugger                              // 🔴 [断点] setter 被调用时触发派发更新
+    // [注释] 遍历 subs 中所有 watcher，调用它们的 update 方法
+    const subs = this.subs.slice()        // 浅拷贝，防止订阅者在回调中修改 subs
+    for (let i = 0, l = subs.length; i < l; i++) {
+      subs[i].update()                    // [注释] 触发 watcher 更新（异步队列）
+    }
+  }
+}
+// [注释] Dep.target 是全局唯一的"当前正在求值的 Watcher"
+// pushTarget(w) 设置，popTarget() 恢复为上一个 watcher（支持嵌套 watcher）
+Dep.target = null
+const targetStack = []
+
+function pushTarget(target) {
+  debugger                                // 🔴 [断点] Watcher 开始求值前，将自己推入 targetStack
+  targetStack.push(target)
+  Dep.target = target                     // [注释] 设置全局 target，使 getter 能感知当前 watcher
+}
+function popTarget() {
+  debugger                                // 🔴 [断点] Watcher 求值完成，弹出栈
+  targetStack.pop()
+  Dep.target = targetStack[targetStack.length - 1]  // [注释] 恢复为父级 watcher（支持嵌套）
+}
+
+// ---------- 2. Observer（响应式观测器）----------
+// 源码位置: src/core/observer/index.js
+
+// [注释] Observer 类: 递归地将对象的每个属性变为响应式
+class Observer {
+  constructor(value) {
+    debugger                              // 🔴 [断点] Observer 构造入口，value 是原始数据对象
+    this.value = value
+    this.dep = new Dep()                  // [注释] 用于 $set/$delete 和数组变更通知
+    this.vmCount = 0
+    // [注释] def(value, '__ob__', this): 在数据对象上标记 __ob__ 属性
+    // __ob__ 是不可枚举的，用于标识对象已被观测
+    def(value, '__ob__', this)
+    if (Array.isArray(value)) {
+      // [注释] 数组走特殊处理：重写 push/pop/shift/unshift/splice/sort/reverse
+      // 这里为简化省略，直接遍历索引 defineReactive
+      this.observeArray(value)
+    } else {
+      this.walk(value)                    // [注释] 对象类型 → 遍历所有 key 逐个 defineReactive
+    }
+  }
+  // [注释] walk: 遍历对象所有属性，对每个属性调用 defineReactive
+  walk(obj) {
+    debugger                              // 🔴 [断点] 遍历属性前，keys 是所有可枚举键
+    const keys = Object.keys(obj)
+    for (let i = 0; i < keys.length; i++) {
+      defineReactive(obj, keys[i])        // [注释] 核心：为每个属性添加 getter/setter
+    }
+  }
+  // [注释] observeArray: 遍历数组每个元素，递归 observe
+  observeArray(items) {
+    for (let i = 0; i < items.length; i++) {
+      observe(items[i])
+    }
+  }
+}
+
+// [注释] observe: 响应式入口函数，判断是否创建 Observer
+function observe(value, asRootData) {
+  debugger                                // 🔴 [断点] observe 入口
+  if (typeof value !== 'object' || value === null) {
+    return                                 // [注释] 非对象类型直接跳过
+  }
+  let ob
+  // [注释] 如果对象已有 __ob__ 标记（已经观测过），直接复用
+  if (value.hasOwnProperty('__ob__') && value.__ob__ instanceof Observer) {
+    ob = value.__ob__
+  } else {
+    ob = new Observer(value)              // [注释] 创建 Observer → walk → defineReactive
+  }
+  return ob
+}
+
+// [注释] defineReactive: 响应式系统的核心！
+// 用 Object.defineProperty 为对象的每个属性创建 getter/setter
+function defineReactive(obj, key, val) {
+  debugger                                // 🔴 [断点] defineReactive 入口
+  // [注释] 每个属性在闭包中持有一个独立的 Dep 实例！
+  // 这是关键：dep 在闭包中，外部无法直接访问，但 getter/setter 可以访问
+  const dep = new Dep()
+  // [注释] 获取属性描述符
+  const property = Object.getOwnPropertyDescriptor(obj, key)
+  if (property && property.configurable === false) {
+    return                                 // [注释] 不可配置的属性无法劫持
+  }
+  // [注释] 获取已有的 getter/setter（若有）
+  const getter = property && property.get
+  const setter = property && property.set
+  // [注释] 如果未传 val，从对象上读取当前值
+  if ((!getter || setter) && arguments.length === 2) {
+    val = obj[key]
+  }
+  // [注释] 递归观测子对象（深层响应式的关键）
+  let childOb = observe(val)
+  // [注释] 核心：用 defineProperty 劫持
+  Object.defineProperty(obj, key, {
+    enumerable: true,
+    configurable: true,
+    // [注释] getter: 依赖收集阶段
+    get: function reactiveGetter() {
+      debugger                            // 🔴 [断点] 属性被读取时进入这里
+      // [注释] 如果有原始 getter，先获取值
+      const value = getter ? getter.call(obj) : val
+      // [注释] 关键步骤！收集依赖：将当前 Watcher 添加到 dep 中
+      if (Dep.target) {
+        dep.depend()                      // [注释] → Dep.target.addDep(dep) → dep.addSub(watcher)
+        // [注释] 如果值有子 Observer，子对象也需要收集依赖
+        // 这是为了 $set / 数组变更时能通知到
+        if (childOb) {
+          childOb.dep.depend()            // [注释] 子对象的 __ob__.dep 也关联当前 watcher
+        }
+      }
+      return value
+    },
+    // [注释] setter: 派发更新阶段
+    set: function reactiveSetter(newVal) {
+      debugger                            // 🔴 [断点] 属性被赋值时进入这里
+      const value = getter ? getter.call(obj) : val
+      // [注释] 值未变化或 NaN 时跳过
+      if (newVal === value || (newVal !== newVal && value !== value)) {
+        return
+      }
+      // [注释] 如果有原始 setter，先调用
+      if (setter) {
+        setter.call(obj, newVal)
+      } else {
+        val = newVal
+      }
+      // [注释] 新值也可能是对象，需要重新 observe
+      childOb = observe(newVal)
+      // [注释] 关键步骤！派发更新：通知所有依赖此属性的 watcher 更新
+      dep.notify()                        // [注释] → subs.forEach(watcher.update())
+    }
+  })
+}
+
+// ---------- 3. Watcher（观察者 / 依赖）----------
+// 源码位置: src/core/observer/watcher.js
+
+let watcherId = 0
+class Watcher {
+  // [注释] vm: Vue 实例, expOrFn: 表达式或函数, cb: 回调
+  constructor(vm, expOrFn, cb, options) {
+    debugger                              // 🔴 [断点] Watcher 构造函数入口
+    this.vm = vm
+    vm._watchers.push(this)
+    this.id = ++watcherId
+    this.cb = cb                           // [注释] 回调函数（如渲染 watcher 的回调是更新 DOM）
+    this.deps = []                         // [注释] 当前 watcher 依赖的所有 Dep 实例
+    this.depIds = new Set()               // [注释] dep ID 集合，用于去重
+    this.newDeps = []                      // [注释] 本轮求值中新收集的 Dep
+    this.newDepIds = new Set()            // [注释] 新 depId 集合
+    // [注释] 解析 expOrFn：如果是函数直接赋值，如果是字符串则从 vm 上取值
+    if (typeof expOrFn === 'function') {
+      this.getter = expOrFn
+    } else {
+      this.getter = parsePath(expOrFn)     // [注释] 字符串表达式如 'a.b.c' → 函数
+    }
+    // [注释] 立即执行一次求值：这会触发依赖收集
+    this.value = this.get()
+  }
+  // [注释] get: 求值并触发依赖收集
+  get() {
+    debugger                              // 🔴 [断点] Watcher.get() 入口
+    // [注释] 把自己设为全局 Dep.target
+    pushTarget(this)                      // [注释] → Dep.target = this
+    let value
+    const vm = this.vm
+    try {
+      // [注释] 执行 getter 函数：
+      // - 渲染 watcher: 执行 vm._update(vm._render()) 
+      // - 计算属性: 执行用户的 get 函数
+      // - 用户 watcher: 执行 expOrFn 取到的函数
+      value = this.getter.call(vm, vm)
+    } catch (e) {
+      console.error(e)
+    } finally {
+      // [注释] 执行结束，恢复上一个 Watcher
+      popTarget()                          // [注释] → Dep.target = 上一个 watcher
+      // [注释] 清理本轮未被收集的旧依赖
+      this.cleanupDeps()
+    }
+    return value
+  }
+  // [注释] addDep: 双向关联 Dep 和 Watcher
+  addDep(dep) {
+    debugger                              // 🔴 [断点] Watcher 与 Dep 建立关联
+    const id = dep.id
+    // [注释] 去重：同一轮求值中同一个 dep 只添加一次
+    if (!this.newDepIds.has(id)) {
+      this.newDepIds.add(id)
+      this.newDeps.push(dep)
+      // [注释] 如果之前未订阅过此 dep，则添加双向关联
+      if (!this.depIds.has(id)) {
+        dep.addSub(this)                  // [注释] → dep.subs.push(this)
+      }
+    }
+  }
+  // [注释] cleanupDeps: 清理不再需要的旧依赖
+  cleanupDeps() {
+    debugger                              // 🔴 [断点] 清理旧依赖
+    let i = this.deps.length
+    while (i--) {
+      const dep = this.deps[i]
+      // [注释] 如果某个旧 dep 不在本轮新收集的 dep 中，说明不再依赖它，从 dep.subs 移除
+      if (!this.newDepIds.has(dep.id)) {
+        dep.removeSub(this)
+      }
+    }
+    // [注释] 交换 newDeps 和 deps，清空 newDeps
+    let tmp = this.deps
+    this.deps = this.newDeps
+    this.newDeps = tmp
+    this.newDeps.length = 0
+    tmp = this.depIds
+    this.depIds = this.newDepIds
+    this.newDepIds = tmp
+    this.newDepIds.clear()
+  }
+  // [注释] update: 数据变更时被 dep.notify() 调用
+  update() {
+    debugger                              // 🔴 [断点] Watcher.update() — 数据变更！
+    // [注释] 渲染 watcher 和用户 watcher 走异步队列（批量更新）
+    // computed watcher 走 lazy 模式
+    queueWatcher(this)                    // [注释] → 推入异步队列
+  }
+  // [注释] run: 异步队列中实际执行
+  run() {
+    debugger                              // 🔴 [断点] Watcher.run() — 异步队列中执行
+    // [注释] 重新求值 → 触发依赖重新收集 → 如果值变化则触发回调
+    const value = this.get()
+    const oldValue = this.value
+    this.value = value
+    if (this.cb) {
+      this.cb.call(this.vm, value, oldValue)  // [注释] 执行回调（如渲染更新）
+    }
+  }
+}
+
+// ---------- 4. 异步更新队列（简化版）----------
+// 源码位置: src/core/observer/scheduler.js
+
+const queue = []                    // [注释] watcher 更新队列
+let has = {}                        // [注释] watcher ID → true，用于去重
+let waiting = false                 // [注释] 是否正在等待刷新
+let flushing = false                // [注释] 是否正在执行队列
+
+function queueWatcher(watcher) {
+  debugger                          // 🔴 [断点] 将 watcher 推入异步队列
+  const id = watcher.id
+  // [注释] 去重：同一个 watcher 在同一个 tick 内只推入一次
+  if (has[id] == null) {
+    has[id] = true
+    if (!flushing) {
+      queue.push(watcher)
+    } else {
+      // [注释] 正在刷新中，按 id 顺序插入
+      let i = queue.length - 1
+      while (i > 0 && queue[i].id > watcher.id) { i-- }
+      queue.splice(i + 1, 0, watcher)
+    }
+    if (!waiting) {
+      waiting = true
+      // [注释] 用 nextTick 批量执行队列，await this.$nextTick() 之后统一执行
+      nextTick(flushSchedulerQueue)
+    }
+  }
+}
+
+function flushSchedulerQueue() {
+  debugger                          // 🔴 [断点] 批量执行 watcher 队列
+  flushing = true
+  queue.sort((a, b) => a.id - b.id) // [注释] 按 id 排序：父组件先于子组件更新
+  for (let i = 0; i < queue.length; i++) {
+    const watcher = queue[i]
+    has[watcher.id] = null          // [注释] 清除去重标记
+    watcher.run()                   // [注释] 执行 watcher → 触发重新渲染
+  }
+  // [注释] 重置状态
+  queue.length = 0
+  has = {}
+  waiting = false
+  flushing = false
+}
+
+// ---------- 5. nextTick 微任务实现 ----------
+// 源码位置: src/core/util/next-tick.js
+const callbacks = []
+let pending = false
+function nextTick(cb) {
+  callbacks.push(cb)
+  if (!pending) {
+    pending = true
+    // [注释] 优先使用 Promise（微任务），无论用哪种方式，都在一个 tick 后执行
+    Promise.resolve().then(flushCallbacks)
+  }
+}
+function flushCallbacks() {
+  pending = false
+  const copies = callbacks.slice(0)
+  callbacks.length = 0
+  for (let i = 0; i < copies.length; i++) {
+    copies[i]()
+  }
+}
+
+// ---------- 6. VNode 类 ----------
+// 源码位置: src/core/vdom/vnode.js
+class VNode {
+  constructor(tag, data, children, text, elm) {
+    debugger                          // 🔴 [断点] VNode 构造
+    this.tag = tag                    // [注释] 标签名：'div', 'p' 等
+    this.data = data                  // [注释] VNode 数据：attrs, props, on, style 等
+    this.children = children          // [注释] 子 VNode 数组
+    this.text = text                  // [注释] 文本节点的文本内容
+    this.elm = elm                    // [注释] 对应的真实 DOM 元素
+    this.key = data && data.key       // [注释] diff 算法核心：key 用于复用节点
+  }
+}
+
+// ---------- 7. 工具函数 ----------
+function def(obj, key, val) {
+  // [注释] 将属性定义为不可枚举，防止 Object.keys 遍历到 __ob__
+  Object.defineProperty(obj, key, {
+    value: val,
+    enumerable: false,
+    writable: true,
+    configurable: true,
+  })
+}
+
+function parsePath(path) {
+  // [注释] 将字符串 'a.b.c' 转为函数 → 从对象上取值
+  const segments = path.split('.')
+  return function (obj) {
+    for (let i = 0; i < segments.length; i++) {
+      if (!obj) return
+      obj = obj[segments[i]]
+    }
+    return obj
+  }
+}
+
+// ---------- 8. 简化的 patch 函数（核心流程）----------
+// 源码位置: src/core/vdom/patch.js
+// [注释] 真实 Vue 的 patch 由 snabbdom 改编，这里给出核心流程的简化实现
+
+function sameVnode(a, b) {
+  // [注释] 判断两个 VNode 是否"相同"：key 相同且 tag 相同
+  return a.key === b.key && a.tag === b.tag
+}
+
+function createElm(vnode) {
+  debugger                            // 🔴 [断点] createElm：VNode → 真实 DOM 元素
+  const data = vnode.data
+  const children = vnode.children
+  const tag = vnode.tag
+  if (tag) {
+    // [注释] 元素节点：创建 DOM 元素
+    vnode.elm = document.createElement(tag)
+    // [注释] 递归创建子节点
+    if (Array.isArray(children)) {
+      for (let i = 0; i < children.length; i++) {
+        vnode.elm.appendChild(createElm(children[i]))
+      }
+    }
+  } else {
+    // [注释] 文本节点
+    vnode.elm = document.createTextNode(vnode.text)
+  }
+  return vnode.elm
+}
+
+// [注释] 简化版 patch：核心 diff 逻辑
+function patch(oldVnode, vnode) {
+  debugger                            // 🔴 [断点] patch 入口：旧 VNode vs 新 VNode
+  // [注释] 如果 oldVnode 是真实 DOM（首次渲染），转为空 VNode
+  if (oldVnode.nodeType) {
+    // 首次渲染：oldVnode 是真实 DOM 容器
+    const elm = createElm(vnode)
+    oldVnode.parentNode.insertBefore(elm, oldVnode)
+    oldVnode.parentNode.removeChild(oldVnode)
+    return elm
+  }
+  // [注释] 更新阶段：对比新旧 VNode
+  if (!sameVnode(oldVnode, vnode)) {
+    // [注释] 不是相同节点 → 暴力替换：移除旧的，插入新的
+    const elm = createElm(vnode)
+    if (oldVnode.elm && oldVnode.elm.parentNode) {
+      oldVnode.elm.parentNode.replaceChild(elm, oldVnode.elm)
+    }
+    return elm
+  }
+  // [注释] 是相同节点 → 进入 patchVnode 精细化更新
+  patchVnode(oldVnode, vnode)
+  return vnode.elm
+}
+
+// [注释] patchVnode: 对比两个"相同"VNode 的差异并更新 DOM
+function patchVnode(oldVnode, vnode) {
+  debugger                            // 🔴 [断点] patchVnode：精细化对比两个 VNode
+  const elm = (vnode.elm = oldVnode.elm)
+  const oldCh = oldVnode.children
+  const ch = vnode.children
+  // [注释] 如果是文本节点
+  if (vnode.text !== undefined && vnode.text !== oldVnode.text) {
+    elm.textContent = vnode.text
+    return
+  }
+  // [注释] 都有子节点（数组）→ 进入最核心的 diff 算法
+  if (oldCh && ch) {
+    if (oldCh !== ch) {
+      updateChildren(elm, oldCh, ch)    // 🔥 双端 Diff
+    }
+  } else if (ch) {
+    // [注释] 只有新子节点（旧节点无子节点）→ 直接添加
+    for (let i = 0; i < ch.length; i++) {
+      elm.appendChild(createElm(ch[i]))
+    }
+  } else if (oldCh) {
+    // [注释] 只有旧子节点（新节点无子节点）→ 直接删除
+    elm.innerHTML = ''
+  }
+}
+
+// [注释] updateChildren: 双端 Diff 算法 —— Vue 2 的核心！
+// 四个指针: oldStartIdx, oldEndIdx, newStartIdx, newEndIdx
+// 每轮循环做 4 种比较：头头 / 尾尾 / 头尾 / 尾头
+function updateChildren(parentElm, oldCh, newCh) {
+  debugger                            // 🔴 [断点] updateChildren：双端 Diff 入口
+  let oldStartIdx = 0
+  let newStartIdx = 0
+  let oldEndIdx = oldCh.length - 1
+  let newEndIdx = newCh.length - 1
+  let oldStartVnode = oldCh[0]
+  let oldEndVnode = oldCh[oldEndIdx]
+  let newStartVnode = newCh[0]
+  let newEndVnode = newCh[newEndIdx]
+  let oldKeyToIdx, idxInOld
+
+  // [注释] 当新旧四个指针没有交叉时，循环继续
+  while (oldStartIdx <= oldEndIdx && newStartIdx <= newEndIdx) {
+    debugger                          // 🔴 [断点] 双端 Diff 每一次循环迭代
+    if (oldStartVnode == null) {
+      oldStartVnode = oldCh[++oldStartIdx]
+    } else if (oldEndVnode == null) {
+      oldEndVnode = oldCh[--oldEndIdx]
+    }
+    // [注释] 比较1: 头 vs 头 (oldStart vs newStart)
+    else if (sameVnode(oldStartVnode, newStartVnode)) {
+      patchVnode(oldStartVnode, newStartVnode)
+      oldStartVnode = oldCh[++oldStartIdx]
+      newStartVnode = newCh[++newStartIdx]
+    }
+    // [注释] 比较2: 尾 vs 尾 (oldEnd vs newEnd)
+    else if (sameVnode(oldEndVnode, newEndVnode)) {
+      patchVnode(oldEndVnode, newEndVnode)
+      oldEndVnode = oldCh[--oldEndIdx]
+      newEndVnode = newCh[--newEndIdx]
+    }
+    // [注释] 比较3: 头 vs 尾 (oldStart vs newEnd)
+    else if (sameVnode(oldStartVnode, newEndVnode)) {
+      patchVnode(oldStartVnode, newEndVnode)
+      // [注释] 把旧头节点移动到旧尾之后
+      parentElm.insertBefore(oldStartVnode.elm, oldEndVnode.elm.nextSibling)
+      oldStartVnode = oldCh[++oldStartIdx]
+      newEndVnode = newCh[--newEndIdx]
+    }
+    // [注释] 比较4: 尾 vs 头 (oldEnd vs newStart)
+    else if (sameVnode(oldEndVnode, newStartVnode)) {
+      patchVnode(oldEndVnode, newStartVnode)
+      // [注释] 把旧尾节点移动到旧头之前
+      parentElm.insertBefore(oldEndVnode.elm, oldStartVnode.elm)
+      oldEndVnode = oldCh[--oldEndIdx]
+      newStartVnode = newCh[++newStartIdx]
+    }
+    // [注释] 四种快捷方式都未命中：使用 key 在旧 children 中查找
+    else {
+      // [注释] 构建 key → index 映射表（仅首次未命中时构建，惰性优化）
+      if (!oldKeyToIdx) {
+        oldKeyToIdx = {}
+        for (let i = oldStartIdx; i <= oldEndIdx; i++) {
+          const key = oldCh[i] && oldCh[i].key
+          if (key != null) oldKeyToIdx[key] = i
+        }
+      }
+      // [注释] 查找新头节点在旧 children 中的位置
+      idxInOld = newStartVnode.key != null
+        ? oldKeyToIdx[newStartVnode.key]
+        : findIdxInOld(newStartVnode, oldCh, oldStartIdx, oldEndIdx)
+      if (idxInOld == null) {
+        // [注释] 未找到 → 新节点，直接创建并插入
+        parentElm.insertBefore(createElm(newStartVnode), oldStartVnode.elm)
+      } else {
+        const vnodeToMove = oldCh[idxInOld]
+        if (sameVnode(vnodeToMove, newStartVnode)) {
+          patchVnode(vnodeToMove, newStartVnode)
+          oldCh[idxInOld] = null  // [注释] 标记为已处理
+          parentElm.insertBefore(vnodeToMove.elm, oldStartVnode.elm)
+        } else {
+          // [注释] key 相同但 tag 不同 → 视为新节点
+          parentElm.insertBefore(createElm(newStartVnode), oldStartVnode.elm)
+        }
+      }
+      newStartVnode = newCh[++newStartIdx]
+    }
+  }
+  // [注释] 循环结束后的收尾工作
+  debugger                            // 🔴 [断点] Diff 循环结束，处理剩余节点
+  if (oldStartIdx > oldEndIdx) {
+    // [注释] 旧节点已耗尽 → 新节点还有剩余 → 批量添加
+    for (let i = newStartIdx; i <= newEndIdx; i++) {
+      const refElm = newCh[newEndIdx + 1] ? newCh[newEndIdx + 1].elm : null
+      parentElm.insertBefore(createElm(newCh[i]), refElm)
+    }
+  } else if (newStartIdx > newEndIdx) {
+    // [注释] 新节点已耗尽 → 旧节点还有剩余 → 批量删除
+    for (let i = oldStartIdx; i <= oldEndIdx; i++) {
+      if (oldCh[i] && oldCh[i].elm) {
+        parentElm.removeChild(oldCh[i].elm)
+      }
+    }
+  }
+}
+
+function findIdxInOld(node, oldCh, start, end) {
+  for (let i = start; i <= end; i++) {
+    if (oldCh[i] && sameVnode(oldCh[i], node)) return i
+  }
+}
+
+// =====================================================================
+//  创建一个简易 Vue 类，用于演示 _render + _update 流程
+// =====================================================================
+class SimpleVue {
+  constructor(options) {
+    this.$options = options
+    this._data = options.data ? options.data() : {}
+    this._watchers = []
+    // [注释] 将 data 中的属性代理到 this 上
+    for (const key in this._data) {
+      Object.defineProperty(this, key, {
+        get: () => this._data[key],
+        set: (v) => { this._data[key] = v },
+      })
+    }
+    // [注释] 第一步：将 data 变为响应式
+    observe(this._data)
+  }
+  // [注释] _render: 执行 render 函数获取 VNode
+  _render() {
+    debugger                            // 🔴 [断点] _render: 执行 render 函数
+    const h = (tag, data, children) => {
+      // [注释] 简化版 createElement
+      if (Array.isArray(data) || typeof data === 'string') {
+        children = data; data = {}
+      }
+      if (typeof children === 'string') {
+        children = [new VNode(undefined, undefined, undefined, children)]
+      }
+      return new VNode(tag, data, children, undefined)
+    }
+    return this.$options.render.call(this, h)
+  }
+  // [注释] _update: 将 VNode 渲染为真实 DOM
+  _update(vnode) {
+    debugger                            // 🔴 [断点] _update: VNode → DOM
+    const prevVnode = this._vnode
+    this._vnode = vnode
+    if (!prevVnode) {
+      // [注释] 首次渲染：patch(真实DOM容器, vnode)
+      this.$el = patch(this.$options.el, vnode)
+    } else {
+      // [注释] 更新：patch(oldVnode, newVnode)
+      this.$el = patch(prevVnode, vnode)
+    }
+  }
+  // [注释] mount: 挂载方法
+  $mount(el) {
+    this.$options.el = typeof el === 'string'
+      ? document.querySelector(el)
+      : el
+    // [注释] 创建渲染 Watcher → 自动执行依赖收集 + 初次渲染
+    const updateComponent = () => {
+      this._update(this._render())       // [注释] _render → _update → patch
+    }
+    this._watcher = new Watcher(this, updateComponent, null)
+    return this
+  }
+  // [注释] 简化版 $set
+  $set(target, key, val) {
+    debugger                            // 🔴 [断点] $set: 为已有对象添加响应式属性
+    defineReactive(target, key, val)
+    target.__ob__.dep.notify()
+  }
+  // [注释] 简化版 $nextTick
+  $nextTick(cb) {
+    nextTick(cb)
+  }
+}
+
+// =====================================================================
+//  交互步骤函数
+// =====================================================================
+
+function step1_initObserve() {
+  document.getElementById('app-area').innerHTML = ''
+  console.clear()
+  console.log('%c===== 步骤 1: observe() → Observer → walk() → defineReactive() =====', 'color:#cba6f7;font-size:14px')
+  console.log('📂 源码对照: src/core/observer/index.js (Observer), dep.js (Dep)')
+  console.log('🔑 核心: 每个属性在闭包中持有一个 Dep 实例，通过 Object.defineProperty 劫持 getter/setter')
+  debugger  // 🔴 断点: step 1 入口
+
+  window._vm = new SimpleVue({
+    data() {
+      return {
+        user: { name: 'Alice', age: 20 },
+        count: 0,
+        items: ['A', 'B', 'C']
+      }
+    },
+    render(h) {
+      return h('div', [
+        h('p', `姓名: ${this.user.name}`),
+        h('p', `年龄: ${this.user.age}`),
+        h('p', `计数: ${this.count}`),
+        h('p', `列表: ${this.items.join(', ')}`)
+      ])
+    }
+  })
+  console.log('✅ observe 完成！data 已被响应式化')
+  console.log('🔍 查看 data.__ob__:', window._vm._data.__ob__)
+  debugger  // 🔴 断点: step 1 完成
+}
+
+function step2_dependCollect() {
+  if (!window._vm) { alert('请先执行步骤 1'); return }
+  console.clear()
+  console.log('%c===== 步骤 2: Watcher 构造 → pushTarget → getter → Dep.depend() =====', 'color:#a6e3a1;font-size:14px')
+  console.log('📂 源码对照: src/core/observer/watcher.js (Watcher), dep.js (Dep)')
+  console.log('🔑 核心: Watcher.get() 中 pushTarget(this) → 执行 render → 读取 data 触发 getter → dep.depend() 收集依赖')
+  debugger  // 🔴 断点: step 2 入口 — Watcher 即将创建
+
+  window._vm.$mount('#app-area')
+
+  console.log('✅ 依赖收集完成！每个被访问的 data 属性的 dep.subs 中都有了渲染 watcher')
+  debugger  // 🔴 断点: step 2 完成
+}
+
+function step3_triggerUpdate() {
+  if (!window._vm) { alert('请先执行步骤 1 和 2'); return }
+  console.clear()
+  console.log('%c===== 步骤 3: setter → dep.notify() → watcher.update() → queueWatcher =====', 'color:#f38ba8;font-size:14px')
+  console.log('📂 源码对照: src/core/observer/index.js (setter), scheduler.js (queueWatcher)')
+  console.log('🔑 核心: 修改 data → 触发 setter → dep.notify() → watcher.update() → 推入异步队列')
+  debugger  // 🔴 断点: step 3 入口 — 即将修改数据
+
+  window._vm.user.name = 'Bob'
+
+  console.log('✅ 数据已修改，setter 已触发，watcher 已推入异步队列')
+  console.log('⏳ 等待 nextTick 批量执行...')
+  debugger  // 🔴 断点: step 3 — 注意此时 DOM 可能还未更新（异步）
+}
+
+function step4_createVNode() {
+  if (!window._vm) { alert('请先执行步骤 1 和 2'); return }
+  console.clear()
+  console.log('%c===== 步骤 4: _render() → h() / createElement → new VNode() =====', 'color:#a6e3a1;font-size:14px')
+  console.log('📂 源码对照: src/core/vdom/vnode.js (VNode), create-element.js')
+  console.log('🔑 核心: 执行 render(h) → h(tag, data, children) → new VNode() 构建虚拟 DOM 树')
+  debugger  // 🔴 断点: step 4 入口
+
+  const vnode = window._vm._render()
+  console.log('✅ VNode 创建完成:', vnode)
+  window._lastVNode = vnode
+  debugger  // 🔴 断点: step 4 完成
+}
+
+function step5_initialPatch() {
+  if (!window._vm) { alert('请先执行步骤 1 和 2'); return }
+  console.clear()
+  console.log('%c===== 步骤 5: _update(vnode) → patch(首次渲染) → createElm → insert =====', 'color:#a6e3a1;font-size:14px')
+  console.log('📂 源码对照: src/core/vdom/patch.js (createElm, patch 首次渲染分支)')
+  console.log('🔑 核心: oldVnode 是真实 DOM → createElm(vnode) 递归创建 DOM → insert 插入页面')
+  debugger  // 🔴 断点: step 5 入口
+
+  // 重新挂载演示
+  document.getElementById('app-area').innerHTML = ''
+  const vm2 = new SimpleVue({
+    data() { return { msg: 'Hello Vue!', count: 1 } },
+    render(h) {
+      return h('div', [
+        h('p', this.msg),
+        h('p', `计数: ${this.count}`)
+      ])
+    }
+  })
+  vm2.$mount('#app-area')
+  window._vm2 = vm2
+  console.log('✅ patch 完成，真实 DOM 已插入页面')
+  debugger  // 🔴 断点: step 5 完成
+}
+
+function step6_viewUpdate() {
+  if (!window._vm2) { alert('请先执行步骤 5'); return }
+  console.clear()
+  console.log('%c===== 步骤 6: 视图更新: 数据变更 → Watcher.run() → _update → patch =====', 'color:#f9e2af;font-size:14px')
+  console.log('📂 源码对照: src/core/vdom/patch.js (patchVnode)')
+  console.log('🔑 核心: 新旧 VNode sameVnode 判断 → patchVnode 精细化更新 DOM')
+  debugger  // 🔴 断点: step 6 入口
+
+  window._vm2.msg = 'Hello Updated!'
+
+  console.log('✅ 数据修改完成，patchVnode 已执行，DOM 文本已更新')
+  debugger  // 🔴 断点: step 6 完成
+}
+
+function step7_diffChildren() {
+  if (!window._vm2) { alert('请先执行步骤 5'); return }
+  console.clear()
+  console.log('%c===== 步骤 7: updateChildren() 双端 Diff 算法 =====', 'color:#f38ba8;font-size:14px')
+  console.log('📂 源码对照: src/core/vdom/patch.js updateChildren()')
+  console.log('🔑 核心: 四指针 (oldS/oldE/newS/newE) + 四种比较 (头头/尾尾/头尾/尾头) + key 查找')
+  console.log('    时间复杂度 O(n)，在大多数情况下只需要一次遍历')
+  debugger  // 🔴 断点: step 7 入口
+
+  // 重建带列表的数据（用于演示子节点 diff）
+  document.getElementById('app-area').innerHTML = ''
+  const vm3 = new SimpleVue({
+    data() {
+      return {
+        list: [
+          { id: 1, text: 'A' },
+          { id: 2, text: 'B' },
+          { id: 3, text: 'C' },
+          { id: 4, text: 'D' },
+          { id: 5, text: 'E' },
+        ]
+      }
+    },
+    render(h) {
+      const children = this.list.map(item =>
+        h('li', { key: item.id }, `${item.id}: ${item.text}`)
+      )
+      return h('ul', children)
+    }
+  })
+  vm3.$mount('#app-area')
+  window._vm3 = vm3
+  console.log('✅ 初始列表已渲染: A B C D E')
+  console.log('🔄 现在修改数组（交换头尾位置），观察双端 Diff:')
+  console.log('   old: [1:A, 2:B, 3:C, 4:D, 5:E]')
+  console.log('   new: [5:E, 4:D, 3:C, 2:B, 1:A]')
+
+  setTimeout(() => {
+    debugger  // 🔴 断点: 数组即将倒序
+    window._vm3.list = [
+      { id: 5, text: 'E' },
+      { id: 4, text: 'D' },
+      { id: 3, text: 'C' },
+      { id: 2, text: 'B' },
+      { id: 1, text: 'A' },
+    ]
+    console.log('✅ 数组倒序完成，观察 updateChildren 的双端指针移动')
+    debugger  // 🔴 断点: step 7 完成
+  }, 500)
+}
+
+function step8_asyncQueue() {
+  if (!window._vm) { alert('请先执行步骤 1 和 2'); return }
+  console.clear()
+  console.log('%c===== 步骤 8: nextTick 异步队列: queueWatcher → flushSchedulerQueue =====', 'color:#cba6f7;font-size:14px')
+  console.log('📂 源码对照: src/core/observer/scheduler.js, util/next-tick.js')
+  console.log('🔑 核心: 多次数据变更只触发一次 patch！watcher.update() → queueWatcher(watcher) 去重')
+  console.log('     → nextTick(flushSchedulerQueue) → microTask 批量执行')
+  debugger  // 🔴 断点: step 8 入口
+
+  const countBefore = window._vm.count
+  console.log(`当前 count = ${countBefore}`)
+  console.log('连续修改 3 次 count: 100, 200, 300')
+  window._vm.count = 100
+  console.log('→ count = 100')
+  window._vm.count = 200
+  console.log('→ count = 200')
+  window._vm.count = 300
+  console.log('→ count = 300')
+  console.log('注意: 前两次更新只进了 queueWatcher（去重），只有最后一次会实际执行 watcher.run()')
+  console.log('查看 DOM，应该只看到 count = 300，中间值 100/200 不会渲染')
+  debugger  // 🔴 断点: step 8 完成
+}
+
+// =====================================================================
+//  数据探查函数
+// =====================================================================
+function inspectAll() {
+  const vm = window._vm
+  const vnode = window._lastVNode
+  if (!vm) { outEl().textContent = '请先执行步骤 1 和 2'; return }
+  clearPanel()
+  const data = vm._data
+  logToPanel('=== data 对象 ===')
+  logToPanel('  __ob__:', data.__ob__ ? '✅ Observer 实例' : '❌')
+  logToPanel('  __ob__.dep.subs:', data.__ob__ ? data.__ob__.dep.subs.length : 'N/A', '个订阅者')
+  logToPanel('')
+  logToPanel('=== data.user 对象 ===')
+  if (data.user && data.user.__ob__) {
+    logToPanel('  __ob__:', '✅ Observer 实例')
+    logToPanel('  __ob__.dep.subs:', data.user.__ob__.dep.subs.length, '个订阅者')
+    logToPanel('  __ob__.vmCount:', data.user.__ob__.vmCount)
+  }
+  logToPanel('')
+  logToPanel('=== 渲染 Watcher ===')
+  if (vm._watcher) {
+    logToPanel('  id:', vm._watcher.id)
+    logToPanel('  deps 数量:', vm._watcher.deps.length)
+    logToPanel('  depIds:', [...vm._watcher.depIds].join(', '))
+  } else {
+    logToPanel('  尚未创建（请执行步骤 2）')
+  }
+  logToPanel('')
+  logToPanel('=== 当前 VNode ===')
+  if (vnode) {
+    logToPanel('  tag:', vnode.tag)
+    logToPanel('  children 数量:', vnode.children ? vnode.children.length : 0)
+    logToPanel('  key:', vnode.key)
+  } else {
+    logToPanel('  尚未创建（请执行步骤 4）')
+  }
+}
+
+function inspectObserveResult() {
+  const vm = window._vm
+  if (!vm) { outEl().textContent = '请先执行步骤 1'; return }
+  clearPanel()
+  const data = vm._data
+  const desc = Object.getOwnPropertyDescriptor(data, '__ob__')
+  logToPanel('=== data.__ob__ ===')
+  logToPanel('  __ob__ 存在:', data.__ob__ ? '✅' : '❌')
+  logToPanel('  __ob__ 可枚举:', desc ? desc.enumerable : 'N/A', '(应为 false)')
+  logToPanel('  __ob__.dep.id:', data.__ob__ ? data.__ob__.dep.id : 'N/A')
+  logToPanel('  __ob__.value === data:', data.__ob__ ? data.__ob__.value === data : 'N/A')
+  logToPanel('')
+  logToPanel('=== data.user.__ob__ ===')
+  if (data.user && data.user.__ob__) {
+    logToPanel('  user.__ob__ 存在: ✅')
+    logToPanel('  user.__ob__.dep.id:', data.user.__ob__.dep.id)
+    logToPanel('  user.__ob__.dep.subs 数量:', data.user.__ob__.dep.subs.length)
+  }
+  logToPanel('')
+  logToPanel('=== 属性描述符检查 (user.name) ===')
+  const nd = Object.getOwnPropertyDescriptor(data.user, 'name')
+  logToPanel('  getter:', nd && nd.get ? '✅ get 已劫持' : '❌')
+  logToPanel('  setter:', nd && nd.set ? '✅ set 已劫持' : '❌')
+  logToPanel('  enumerable:', nd ? nd.enumerable : 'N/A')
+}
+
+function inspectDeps() {
+  const vm = window._vm
+  if (!vm) { outEl().textContent = '请先执行步骤 1 和 2'; return }
+  clearPanel()
+  const data = vm._data
+  logToPanel('=== dep.subs (订阅者列表) ===')
+  logToPanel('  data.__ob__.dep.subs:', data.__ob__ ? data.__ob__.dep.subs.length : 'N/A', '个')
+  logToPanel('  user.__ob__.dep.subs:', data.user && data.user.__ob__ ? data.user.__ob__.dep.subs.length : 'N/A', '个')
+  logToPanel('')
+  logToPanel('=== 渲染 Watcher 关联信息 ===')
+  if (vm._watcher) {
+    logToPanel('  watcher.id:', vm._watcher.id)
+    logToPanel('  watcher.deps:')
+    vm._watcher.deps.forEach((d, i) => {
+      logToPanel(`    dep[${i}].id = ${d.id}, subs数量 = ${d.subs.length}`)
+    })
+    logToPanel('  watcher.depIds:', [...vm._watcher.depIds].join(', '))
+  }
+  logToPanel('')
+  logToPanel('=== targetMap (data ↔ key ↔ dep 映射) ===')
+  logToPanel('  (闭包中的 dep 无法直接访问，以上 __ob__.dep.subs 是间接路径)')
+  logToPanel('  提示: 在 Console 执行 console.dir(window._vm._data) 手动探查')
+}
+
+function inspectVNode() {
+  clearPanel()
+  const vm = window._vm
+  if (!vm) { outEl().textContent = '请先执行步骤 1 和 2'; return }
+  let vnode = window._lastVNode || (vm._vnode)
+  if (!vnode) {
+    // 手动生成一次
+    vnode = vm._render()
+    window._lastVNode = vnode
+  }
+  function describe(v, indent = 0) {
+    const sp = '  '.repeat(indent)
+    logToPanel(`${sp}VNode {`)
+    if (v.tag) logToPanel(`${sp}  tag: '${v.tag}'`)
+    if (v.text !== undefined) logToPanel(`${sp}  text: '${v.text}'`)
+    if (v.key != null) logToPanel(`${sp}  key: ${v.key}`)
+    if (v.elm) logToPanel(`${sp}  elm: ${v.elm.nodeName || v.elm.nodeType}`)
+    if (v.children && v.children.length) {
+      logToPanel(`${sp}  children: [`)
+      v.children.forEach(c => c.tag || c.text ? describe(c, indent + 2) : null)
+      logToPanel(`${sp}  ]`)
+    }
+    logToPanel(`${sp}}`)
+  }
+  describe(vnode)
+}
+
+// =====================================================================
+//  页面启动
+// =====================================================================
+console.log('%c🔬 Vue 2 核心源码调试 Demo 已就绪', 'color:#89b4fa;font-size:16px')
+console.log('%c📋 使用说明:', 'color:#f9e2af')
+console.log('  1. 打开 DevTools → Sources 面板')
+console.log('  2. 按顺序点击页面上的按钮（1→2→3...→8）')
+console.log('  3. 在 debugger 处暂停时，按 F11 (Step Into) 进入函数内部')
+console.log('  4. 按 F10 (Step Over) 逐行执行，观察变量变化')
+console.log('  5. 在 Watch 面板添加: Dep.target, window._vm._data, window._vm._watcher.deps')
+console.log('')
+console.log('%c📂 核心源码文件对照:', 'color:#cba6f7')
+console.log('  Observer / defineReactive → src/core/observer/index.js')
+console.log('  Dep                      → src/core/observer/dep.js')
+console.log('  Watcher                  → src/core/observer/watcher.js')
+console.log('  Scheduler / queueWatcher → src/core/observer/scheduler.js')
+console.log('  VNode                    → src/core/vdom/vnode.js')
+console.log('  createElement            → src/core/vdom/create-element.js')
+console.log('  patch / updateChildren   → src/core/vdom/patch.js')
+console.log('  nextTick                 → src/core/util/next-tick.js')
+console.log('')
+console.log('%c🔍 推荐 Watch 表达式:', 'color:#a6e3a1')
+console.log('  Dep.target                    当前正在收集依赖的 Watcher')
+console.log('  window._vm._data.__ob__       data 的 Observer 实例')
+console.log('  window._vm._watcher.deps      渲染 Watcher 依赖的所有 Dep')
+console.log('  window._lastVNode             最近一次 render 生成的 VNode')
+</script>
+</body>
+</html>

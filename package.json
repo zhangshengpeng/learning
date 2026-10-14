@@ -1,0 +1,17 @@
+{
+  "name": "vue-source-learning",
+  "version": "1.0.0",
+  "description": "Vue 2 源码深度解析",
+  "scripts": {
+    "dev": "vitepress dev docs",
+    "build": "vitepress build docs",
+    "preview": "vitepress preview docs"
+  },
+  "keywords": ["vue", "source-code", "learning"],
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "vitepress": "^1.6.4",
+    "vue": "^3.5.25"
+  }
+}
