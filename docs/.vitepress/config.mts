@@ -57,6 +57,7 @@ export default defineConfig({
       { text: "🧩 Vue 源码", link: "/vue/" },
       { text: "📝 Vue 题库", link: "/interview" },
       { text: "🔷 TS 题库", link: "/ts-interview" },
+      { text: "📱 uni-app", link: "/uniapp/" },
     ],
 
     sidebar: {
@@ -240,6 +241,26 @@ export default defineConfig({
 
       "/interview": [],
       "/ts-interview": [],
+
+      "/uniapp/": [
+        {
+          text: "uni-app 跨端开发",
+          collapsed: false,
+          items: [
+            { text: "概述", link: "/uniapp/" },
+            { text: "生命周期", link: "/uniapp/lifecycle" },
+            { text: "条件编译", link: "/uniapp/conditional-compilation" },
+            { text: "跨端适配", link: "/uniapp/cross-platform" },
+            { text: "导航与路由", link: "/uniapp/navigation" },
+            { text: "组件系统 & easycom", link: "/uniapp/component" },
+            { text: "API 系统 & 原生能力", link: "/uniapp/api" },
+            { text: "状态管理", link: "/uniapp/store" },
+            { text: "打包与发布", link: "/uniapp/build" },
+            { text: "性能优化", link: "/uniapp/performance" },
+            { text: "面试题库", link: "/uniapp/interview" },
+          ],
+        },
+      ],
     },
 
     socialLinks: [

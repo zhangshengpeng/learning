@@ -658,6 +658,473 @@ function patch(oldVnode, vnode) {
 
 ---
 
+### Q20-1：VNode 的结构是怎样的？有哪些类型？
+
+<details>
+<summary>点击查看答案</summary>
+
+VNode 是一个 class 实例，核心属性：
+
+```js
+class VNode {
+  constructor(tag, data, children, text, elm, context, componentOptions) {
+    this.tag = tag           // 标签名（'div'）或组件构造函数
+    this.data = data         // attrs、props、on、style、class 等
+    this.children = children // 子节点数组
+    this.text = text         // 文本内容（文本节点用）
+    this.elm = elm           // 对应的真实 DOM 节点
+    this.key = data && data.key // diff 优化的关键
+    this.context = context   // 所在组件实例
+
+    // 组件相关
+    this.componentOptions = componentOptions
+    this.componentInstance = undefined
+
+    // 编译优化标记
+    this.isStatic = false    // 静态节点
+    this.isComment = false   // 注释节点
+    this.isOnce = false      // v-once
+    this.isCloned = false    // 克隆节点（静态节点复用）
+  }
+}
+```
+
+**VNode 的六种类型**：
+
+| 类型 | tag | text | 其他特征 | 示例 |
+|:--|:--|:--|:--|:--|
+| 文本节点 | `undefined` | `"hello"` | `children: undefined` | `_v("hello")` |
+| 元素节点 | `"div"` | `undefined` | `children: [...]` | `_c("div", [...])` |
+| 注释节点 | `undefined` | `""` | `isComment: true` | `v-if=false` 占位 |
+| 组件节点 | 组件构造器 | `undefined` | `componentOptions: {...}` | `_c(MyComp)` |
+| 克隆节点 | 同原节点 | 同原节点 | `isCloned: true` | 静态节点复用 |
+| 空节点 | `undefined` | `""` | `isComment: true` | `_e()` |
+
+> 💡 **加分项**：Vue 3 的 VNode 结构和 Vue 2 一脉相承，但增加了 `shapeFlag` 位运算标记节点类型，判断更快
+
+</details>
+
+---
+
+### Q20-2：VNode 是如何变成真实 DOM 的？`createElm` 的完整流程？
+
+<details>
+<summary>点击查看答案</summary>
+
+```js
+function createElm(vnode, parentElm, refElm) {
+  const data = vnode.data
+  const children = vnode.children
+  const tag = vnode.tag
+
+  if (isDef(tag)) {
+    // ── 元素节点 / 组件节点 ──
+    vnode.elm = nodeOps.createElement(tag, vnode)
+    createChildren(vnode, children)       // 递归创建子节点
+    if (isDef(data)) invokeCreateHooks(vnode) // 设置属性/事件/样式
+    insert(parentElm, vnode.elm, refElm)  // 插入父节点
+
+  } else if (isTrue(vnode.isComment)) {
+    // ── 注释节点 ──
+    vnode.elm = nodeOps.createComment(vnode.text)
+    insert(parentElm, vnode.elm, refElm)
+
+  } else {
+    // ── 文本节点 ──
+    vnode.elm = nodeOps.createTextNode(vnode.text)
+    insert(parentElm, vnode.elm, refElm)
+  }
+}
+```
+
+**递归示例**：
+
+```
+template: <div class="box"><span>hello</span></div>
+
+createElm(div)
+  → document.createElement('div')
+  → createElm(span)
+      → document.createElement('span')
+      → createElm("hello")
+          → document.createTextNode("hello")
+          → span.appendChild(textNode)
+      → span
+  → div.appendChild(span)
+  → invokeCreateHooks: 设置 class="box"
+  → parentElm.appendChild(div)
+```
+
+> 💡 **加分项**：`invokeCreateHooks` 不是单独一个函数，而是调用 `cbs.create` 数组中的所有钩子——包括更新 attrs、class、style、绑定事件、绑定指令等
+
+</details>
+
+---
+
+### Q20-3：`sameVnode` 的判断条件是什么？为什么这样设计？
+
+<details>
+<summary>点击查看答案</summary>
+
+```js
+function sameVnode(a, b) {
+  return (
+    a.key === b.key &&              // key 必须一致
+    a.tag === b.tag &&              // 标签类型必须相同
+    a.isComment === b.isComment &&  // 同是注释或同不是
+    isDef(a.data) === isDef(b.data) && // 都有/都没有 data
+    sameInputType(a, b)             // input type 相同（text/radio/...）
+  )
+}
+```
+
+**每个条件的用意**：
+
+| 条件 | 为什么？ | 反例 |
+|:--|:--|:--|
+| `key ===` | key 是节点唯一标识，key 不同说明不是同一个节点 | `<li key="1">` vs `<li key="2">` 不可复用 |
+| `tag ===` | 不同标签结构不同，无法复用 | `<p>` 不能复用成 `<div>` |
+| `isComment ===` | 注释和元素完全不同的节点类型 | 注释节点不能当元素节点用 |
+| `data` 存在性一致 | 有 data 和没 data 的节点处理路径不同 | 带指令的 span 不能复用为纯文本 span |
+| `sameInputType` | `<input type="text">` 和 `<input type="radio">` 行为差异大 | type 变了表单状态会乱 |
+
+**为什么不是"完全相同才复用"？**
+
+Vue 2 采用**宁可复用也不新建**的策略——因为创建 DOM + 销毁旧 DOM 的成本远高于更新属性。只要 `sameVnode` 为 true，就进入 `patchVnode` 做细粒度比较，而不是整个替换。
+
+```js
+if (sameVnode(oldVnode, vnode)) {
+  patchVnode(oldVnode, vnode)  // 复用旧 DOM，只更新变化
+} else {
+  // 创建新 DOM，删除旧 DOM
+  createElm(vnode)
+  nodeOps.removeChild(parentElm, oldVnode.elm)
+}
+```
+
+> 💡 **加分项**：Vue 3 的 `sameVnode` 增加了 `type`（相当于 Vue 2 的 tag）和 key，判断更加紧凑
+
+</details>
+
+---
+
+### Q20-4：`updateChildren` 双端比较的四种命中策略分别处理什么场景？
+
+<details>
+<summary>点击查看答案</summary>
+
+双端指针：`oldStartIdx` / `newStartIdx` 从头部向右，`oldEndIdx` / `newEndIdx` 从尾部向左。
+
+```
+旧数组: [A, B, C, D]
+          ↑        ↑
+        oldS      oldE
+
+新数组: [A, D, B, C]
+          ↑        ↑
+        newS      newE
+```
+
+**① 旧头 vs 新头（sameVnode）—— 都不动，进入 patch**
+
+```
+适用：头部不变，如 push 新元素到末尾
+旧: [A, B, C]      新: [A, B, C, D]
+     ↑ →        →     ↑ →        →
+   patch A-A → oldS++/newS++
+   patch B-B → oldS++/newS++
+   patch C-C → oldS > oldE → addVnodes(D)
+```
+
+**② 旧尾 vs 新尾（sameVnode）—— 都不动，进入 patch**
+
+```
+适用：尾部不变，如 unshift 新元素到头部
+旧: [A, B, C]      新: [D, A, B, C]
+     ←        ←      ←        ←
+   patch C-C → oldE--/newE--
+   patch B-B → oldE--/newE--
+   patch A-A → oldS > oldE → addVnodes(D)
+```
+
+**③ 旧头 vs 新尾（sameVnode）—— 节点右移**
+
+```
+适用：头部元素被移到末尾
+旧: [A, B, C, D]    新: [B, C, D, A]
+     ↑                          ↑
+   A 在旧数组头部、新数组尾部 → insertBefore(parent, A.elm, D.elm.nextSibling)
+   效果：把 A 移到 D 后面 → oldS++, newE--
+```
+
+**④ 旧尾 vs 新头（sameVnode）—— 节点左移**
+
+```
+适用：尾部元素被移到开头
+旧: [A, B, C, D]    新: [D, A, B, C]
+              ↑        ↑
+   D 在旧数组尾部、新数组头部 → insertBefore(parent, D.elm, A.elm)
+   效果：把 D 移到 A 前面 → oldE--, newS++
+```
+
+**⑤ 四种均不命中 → key 查找**
+
+```js
+oldKeyToIdx = { A:0, B:1, C:2, D:3 }
+idxInOld = oldKeyToIdx[newStartVnode.key] // 通过 key 找到在旧数组的索引
+```
+
+**四种策略覆盖了 90% 的常见 DOM 操作**（增加、删除、移动、反转），都是 O(1) 命中，无需遍历查找。
+
+> 💡 **加分项**：React 的 diff 是单向遍历（只从头部开始），Vue 2 的双端比较在反转场景下明显优于 React
+
+</details>
+
+---
+
+### Q20-5：`patchVnode` 内部做了什么？有哪些优化？
+
+<details>
+<summary>点击查看答案</summary>
+
+```js
+function patchVnode(oldVnode, vnode) {
+  // ① 同一个 VNode 引用，直接跳过
+  if (oldVnode === vnode) return
+
+  const elm = (vnode.elm = oldVnode.elm) // 复用旧 DOM
+  const oldCh = oldVnode.children
+  const ch = vnode.children
+
+  // ② 静态节点优化：直接跳过
+  if (vnode.isStatic && oldVnode.isStatic && vnode.key === oldVnode.key) {
+    vnode.componentInstance = oldVnode.componentInstance
+    return
+  }
+
+  // ③ 非文本节点：比较 children
+  if (isUndef(vnode.text)) {
+    if (isDef(oldCh) && isDef(ch)) {
+      // 新旧都有 children → 核心 Diff
+      if (oldCh !== ch) updateChildren(elm, oldCh, ch)
+    } else if (isDef(ch)) {
+      // 只有新 children：清空旧文本 → 新增
+      if (isDef(oldVnode.text)) setTextContent(elm, '')
+      addVnodes(elm, null, ch, 0, ch.length - 1)
+    } else if (isDef(oldCh)) {
+      // 只有旧 children：删除
+      removeVnodes(oldCh, 0, oldCh.length - 1)
+    } else if (isDef(oldVnode.text)) {
+      // 旧文本 → 新空：清空文本
+      setTextContent(elm, '')
+    }
+  }
+  // ④ 文本节点：直接设置
+  else if (oldVnode.text !== vnode.text) {
+    setTextContent(elm, vnode.text)
+  }
+}
+```
+
+**三种优化场景总结**：
+
+| 场景 | oldVnode | vnode | 处理 |
+|:--|:--|:--|:--|
+| 静态节点 | `isStatic: true` | `isStatic: true` | 直接跳过，0 开销 |
+| 同引用 | `=== vnode` | `=== oldVnode` | 直接跳过 |
+| children 更新 | 有 oldCh | 有 ch | 进入 updateChildren |
+| 新增 children | 文本/无 | 有 ch | addVnodes |
+| 删除 children | 有 oldCh | 无/文本 | removeVnodes |
+
+> 💡 **加分项**：静态节点跳过是编译优化的成果——`optimize` 阶段标记了 `isStatic`，运行时 patch 零开销
+
+</details>
+
+---
+
+### Q20-6：虚拟 DOM 一定比直接操作真实 DOM 快吗？
+
+<details>
+<summary>点击查看答案</summary>
+
+**不一定。分场景讨论：**
+
+```
+┌────────────────────────────────────────────────┐
+│  首次渲染                                       │
+│  虚拟 DOM: create VNode → createElm → DOM      │
+│  直接操作: create DOM                           │
+│  → 虚拟 DOM 多了一层 VNode 创建，反而更慢        │
+├────────────────────────────────────────────────┤
+│  小范围更新（改一个文本）                        │
+│  虚拟 DOM: render → diff → patchText            │
+│  直接操作: el.textContent = 'new'               │
+│  → 直接操作更快，虚拟 DOM 有 diff 开销          │
+├────────────────────────────────────────────────┤
+│  大范围更新（列表重排/大量变更）                 │
+│  虚拟 DOM: diff 找出最小变更 → 批量 DOM 操作     │
+│  直接操作: 逐个 DOM 操作、频繁回流重绘          │
+│  → 虚拟 DOM 显著更快（关键优势场景）             │
+└────────────────────────────────────────────────┘
+```
+
+**核心逻辑**：虚拟 DOM 不是来拼性能极限的，而是：
+
+1. **让开发者脱离 DOM 操作，写出声明式代码**——这是最大价值
+2. **抹平平台差异**——同一套 VNode 可渲染到 DOM、Canvas、Native
+3. **在大型应用中，批量 diff 后再操作 DOM 比零散操作有效得多**
+
+> 💡 **加分项**：Vue 3 的 Block Tree 进一步缩小了 diff 范围，只对比动态节点，让虚拟 DOM 的性能逼近手写 DOM 操作
+
+</details>
+
+---
+
+### Q20-7：Vue 的虚拟 DOM 是如何实现跨平台的？
+
+<details>
+<summary>点击查看答案</summary>
+
+Vue 把平台相关操作抽离成 **`nodeOps`** 和 **`modules`** 两个抽象层：
+
+```js
+// src/platforms/web/runtime/node-ops.js  —— 浏览器平台
+const nodeOps = {
+  createElement: (tagName) => document.createElement(tagName),
+  createTextNode: (text) => document.createTextNode(text),
+  insertBefore: (parent, child, ref) => parent.insertBefore(child, ref),
+  removeChild: (parent, child) => parent.removeChild(child),
+  setTextContent: (node, text) => { node.textContent = text },
+  // ...
+}
+
+// src/platforms/weex/runtime/node-ops.js  —— Weex 平台
+const nodeOps = {
+  createElement: (tagName) => weexDocument.createElement(tagName),
+  // ...Weex 专属 API
+}
+```
+
+```js
+// src/core/vdom/patch.js  —— 核心逻辑不依赖平台
+export function createPatchFunction({ nodeOps, modules }) {
+  return function patch(oldVnode, vnode) {
+    // 所有 DOM 操作都通过 nodeOps 调用，不直接碰 document
+    nodeOps.createElement(...)
+    nodeOps.insertBefore(...)
+  }
+}
+```
+
+```
+┌──────────────────────────────────┐
+│     Vue 核心（vdom/patch）       │  ← 纯 JS 逻辑，与平台无关
+│     createElm / diff / patchVnode │
+└──────────┬───────────────────────┘
+           │  依赖注入
+    ┌──────┴──────┬──────────┐
+    ▼             ▼          ▼
+  浏览器        Weex      自定义
+  (DOM API)   (Native)   (Canvas/SSR)
+```
+
+> 💡 **加分项**：Vue 3 更进一步，把 `nodeOps` 统一到 `RendererOptions` 接口，`createRenderer` 工厂函数创建不同平台的渲染器
+
+</details>
+
+---
+
+### Q20-8：为什么 Vue 不使用 `requestIdleCallback` 做时间切片？
+
+<details>
+<summary>点击查看答案</summary>
+
+React Fiber 用 `requestIdleCallback`（或 polyfill）把 diff 拆成可中断的小任务，Vue 2/3 都没有这么做。
+
+**原因**：
+
+| | React 16+（Fiber） | Vue 2 & 3 |
+|:--|:--|:--|
+| 更新粒度 | 组件级别（大） | 组件 + 属性级别（小） |
+| diff 范围 | 整棵 Fiber 树 | Block Tree 只 diff 动态节点 |
+| 是否需要时间切片 | 是（diff 耗时长） | 否（diff 已经很快） |
+
+**Vue 的选择**：
+
+```
+React: "I don't know what changed, let me diff the whole tree"
+       → diff 太慢 → 需要时间切片避免掉帧
+
+Vue:  "I know exactly what changed (响应式 + Block Tree)"
+       → diff 只针对变化的部分 → 粒度够细，不需要时间切片
+```
+
+**具体优化链**：
+
+```
+数据变化 → Dep.notify → 组件级 Watcher → render → VNode
+  → 静态节点跳过（编译优化）
+  → PatchFlag 靶向更新（Vue 3）
+  → Block Tree 只比动态节点（Vue 3）
+  → diff 粒度已经极小，不会阻塞主线程
+```
+
+> 💡 **加分项**：时间切片不是银弹——它有调度开销、会让渲染变慢。Vue 的策略是"让 diff 本身够快，而不是把慢的 diff 切片"
+
+</details>
+
+---
+
+### Q20-9：`v-once` 和 `v-memo`（Vue 3）在虚拟 DOM 层面做了什么？
+
+<details>
+<summary>点击查看答案</summary>
+
+**v-once（Vue 2 & 3）**：
+
+```html
+<span v-once>{{ heavyComputation }}</span>
+```
+
+编译后：
+
+```js
+// 标记 isOnce，缓存 VNode
+var _cache = this._staticTrees || (this._staticTrees = [])
+var tree = _cache[0]
+if (!tree) {
+  tree = _cache[0] = _c('span', [_v(_s(heavyComputation))])
+}
+return tree
+```
+
+`patchVnode` 中：
+
+```js
+if (vnode.isStatic && oldVnode.isStatic && vnode.key === oldVnode.key) {
+  vnode.componentInstance = oldVnode.componentInstance
+  return  // ← 直接跳过，不做任何比较
+}
+```
+
+**v-memo（Vue 3 新增）**：
+
+```html
+<div v-for="item in list" :key="item.id" v-memo="[item.value]">
+  {{ expensiveRender(item) }}
+</div>
+```
+
+- 缓存上一次 VNode，只有依赖 `[item.value]` 变化时才重新渲染
+- 编译为 `openBlock` + `setBlockTracking(-1)` 跳过该子树的追踪
+- 比 `v-once` 更灵活：不是永远不更新，而是按条件更新
+
+> 💡 **加分项**：`v-memo` 配合 `v-for` 使用可实现"只渲染变化的行"，在大列表性能优化中非常实用
+
+</details>
+
+---
+
 ## 四、模板编译
 
 ### Q21：Vue 的模板编译分哪三步？每步做了什么？

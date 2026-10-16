@@ -58,6 +58,11 @@ features:
     details: 技术选型与架构设计、线上问题排查思路、团队协作与职业成长
     link: /frontend/project/
 
+  - icon: 📱
+    title: uni-app 跨端开发
+    details: 生命周期、条件编译、跨端适配、导航路由、easycom、API 系统、状态管理、打包发布、性能优化 + 面试题库
+    link: /uniapp/
+
   - icon: 📝
     title: Vue 面试题库
     details: 43 道 Vue 2/3 高频面试题，响应式、虚拟 DOM、编译、综合 + 新特性全覆盖
@@ -83,6 +88,7 @@ features:
 | [手写代码](/frontend/handwriting/) | 面试冲刺 | 1 周 |
 | [Vue 面试题库](/interview) | 面试冲刺 | 2~3 天 |
 | [TS 面试题库](/ts-interview) | 面试冲刺 | 1~2 天 |
+| [uni-app 跨端开发](/uniapp/) | Vue 开发者 | 1~2 周 |
 
 ## 🗺️ 学习路线建议
 
@@ -99,6 +105,8 @@ graph TD
     G --> H[手写代码]
     H --> I[面试题库冲刺]
     J[项目 & 软技能] --> I
+    D --> K[uni-app 跨端开发]
+    K --> I
 ```
 
 > **提示**：已有 Vue 开发经验可以 JS 核心 + Vue 源码并行推进，遇到 JS 盲点再去补齐。
